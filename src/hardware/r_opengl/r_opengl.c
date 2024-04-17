@@ -2679,7 +2679,7 @@ EXPORT void HWRAPI(CreateModelVBOs) (model_t *model)
 
 #define BUFFER_OFFSET(i) ((void*)(i))
 
-static void DrawModelEx(model_t *model, INT32 frameIndex, float duration, float tics, INT32 nextFrameIndex, FTransform *pos, float hscale, float vscale, UINT8 flipped, UINT8 hflipped, FSurfaceInfo *Surface)
+static void DrawModelEx(model_t *model, float frameIndex, float duration, float tics, float nextFrameIndex, float frameIndexStep, FTransform *pos, float hscale, float vscale, UINT8 flipped, UINT8 hflipped, FSurfaceInfo *Surface)
 {
 	static GLRGBAFloat poly = {0,0,0,0};
 	static GLRGBAFloat tint = {0,0,0,0};
@@ -2709,6 +2709,7 @@ static void DrawModelEx(model_t *model, INT32 frameIndex, float duration, float 
 	scaley = vscale;
 	scalez = hscale;
 
+	CONS_Printf("d %f, t %f", duration, tics);
 	if (duration > 0.0 && tics >= 0.0) // don't interpolate if instantaneous or infinite in length
 	{
 		float newtime = (duration - tics); // + 1;
@@ -2839,11 +2840,38 @@ static void DrawModelEx(model_t *model, INT32 frameIndex, float duration, float 
 
 		if (useTinyFrames)
 		{
-			tinyframe_t *frame = &mesh->tinyframes[frameIndex % mesh->numFrames];
+			tinyframe_t *frame = &mesh->tinyframes[(INT32)frameIndex];
 			tinyframe_t *nextframe = NULL;
+			float step = fabs(frameIndexStep * pol);
+			INT32 idx = frameIndex;
+			INT32 nidx = nextFrameIndex;
 
-			if (nextFrameIndex != -1)
-				nextframe = &mesh->tinyframes[nextFrameIndex % mesh->numFrames];
+			if (nextFrameIndex > -1.0f)
+			{
+				if ((INT32)nextFrameIndex >= mesh->numFrames)
+					nidx = model->startFrame ? model->startFrame : 0;
+				if (frameIndexStep > 1.0f) //extend the animation beyond the normal allotted frames by using interpolated game frames to draw extra model frames
+				{
+					idx = (INT32)((frameIndex + step >= frameIndex + frameIndexStep) ? nidx : frameIndex + step);
+					frame = &mesh->tinyframes[idx];
+					if (nextFrameIndex <= frameIndex && ((frameIndex + step) + 1) >= frameIndex + frameIndexStep)
+						nextframe = &mesh->tinyframes[nidx];
+					else
+						nextframe = &mesh->tinyframes[idx + 1];
+				}
+				else if (frameIndexStep < -1.0f) //dont interpolate, still extend
+				{
+					idx = (INT32)((frameIndex + step >= frameIndex + (-1.0f * frameIndexStep)) ? nidx : frameIndex + step);
+					frame = &mesh->tinyframes[idx];
+				}
+				else
+				{
+					
+					nextframe = &mesh->tinyframes[nidx];
+				}
+			}
+			//CONS_Printf("idx: %f\n", frameIndex);
+			//CONS_Printf("nidx: %d\n", nidx);
 
 			if (!nextframe || fpclassify(pol) == FP_ZERO)
 			{
@@ -2879,8 +2907,8 @@ static void DrawModelEx(model_t *model, INT32 frameIndex, float duration, float 
 				for (j = 0; j < mesh->numVertices * 3; j++)
 				{
 					// Interpolate
-					*vertPtr++ = (short)(frame->vertices[j] + (pol * (nextframe->vertices[j] - frame->vertices[j])));
-					*normPtr++ = (char)(frame->normals[j] + (pol * (nextframe->normals[j] - frame->normals[j])));
+					*vertPtr++ = (short)(frame->vertices[j] + ((pol >= 1.0f ? 1.0f : fmodf(step, 1)) * (nextframe->vertices[j] - frame->vertices[j])));
+					*normPtr++ = (char)(frame->normals[j] + ((pol >= 1.0f ? 1.0f : fmodf(step, 1)) * (nextframe->normals[j] - frame->normals[j])));
 				}
 
 				pglVertexPointer(3, GL_SHORT, 0, vertTinyBuffer);
@@ -2891,11 +2919,37 @@ static void DrawModelEx(model_t *model, INT32 frameIndex, float duration, float 
 		}
 		else
 		{
-			mdlframe_t *frame = &mesh->frames[frameIndex % mesh->numFrames];
+			mdlframe_t *frame = &mesh->frames[(INT32)frameIndex];
 			mdlframe_t *nextframe = NULL;
+			float step = 0.0f;
+			INT32 idx = frameIndex;
+			INT32 nidx = nextFrameIndex;
 
-			if (nextFrameIndex != -1)
-				nextframe = &mesh->frames[nextFrameIndex % mesh->numFrames];
+			if (nextFrameIndex > -1.0f)
+			{
+				if ((INT32)nextFrameIndex >= mesh->numFrames)
+					nidx = model->startFrame ? model->startFrame : 0;
+				if (frameIndexStep > 1.0f) //extend the animation beyond the normal allotted frames by using interpolated game frames to draw extra model frames
+				{
+					step =  pol * frameIndexStep;
+					idx = (INT32)((frameIndex + step >= frameIndex + frameIndexStep) ? nidx : frameIndex + step);
+					frame = &mesh->frames[idx];
+					if (nextFrameIndex <= frameIndex && ((frameIndex + step) + 1) >= frameIndex + frameIndexStep)
+						nextframe = &mesh->frames[nidx];
+					else
+						nextframe = &mesh->frames[idx + 1];
+				}
+				else if (frameIndexStep < -1.0f) //dont interpolate, still extend
+				{
+					step =  pol * -frameIndexStep;
+					idx = (INT32)((frameIndex + step >= frameIndex + frameIndexStep) ? nidx : frameIndex + step);
+					frame = &mesh->frames[idx];
+				}
+				else
+				{
+					nextframe = &mesh->frames[nidx];
+				}
+			}	
 
 			if (!nextframe || fpclassify(pol) == FP_ZERO)
 			{
@@ -2934,8 +2988,8 @@ static void DrawModelEx(model_t *model, INT32 frameIndex, float duration, float 
 				for (j = 0; j < mesh->numVertices * 3; j++)
 				{
 					// Interpolate
-					*vertPtr++ = frame->vertices[j] + (pol * (nextframe->vertices[j] - frame->vertices[j]));
-					*normPtr++ = frame->normals[j] + (pol * (nextframe->normals[j] - frame->normals[j]));
+					*vertPtr++ = frame->vertices[j] + ((pol >= 1.0f ? 1.0f : fmodf(step, 1)) * (nextframe->vertices[j] - frame->vertices[j]));
+					*normPtr++ = frame->normals[j] + ((pol >= 1.0f ? 1.0f : fmodf(step, 1)) * (nextframe->normals[j] - frame->normals[j]));
 				}
 
 				pglVertexPointer(3, GL_FLOAT, 0, vertBuffer);
@@ -2965,9 +3019,9 @@ static void DrawModelEx(model_t *model, INT32 frameIndex, float duration, float 
 // -----------------+
 // HWRAPI DrawModel : Draw a model
 // -----------------+
-EXPORT void HWRAPI(DrawModel) (model_t *model, INT32 frameIndex, float duration, float tics, INT32 nextFrameIndex, FTransform *pos, float hscale, float vscale, UINT8 flipped, UINT8 hflipped, FSurfaceInfo *Surface)
+EXPORT void HWRAPI(DrawModel) (model_t *model, float frameIndex, float duration, float tics, float nextFrameIndex, float frameIndexStep, FTransform *pos, float hscale, float vscale, UINT8 flipped, UINT8 hflipped, FSurfaceInfo *Surface)
 {
-	DrawModelEx(model, frameIndex, duration, tics, nextFrameIndex, pos, hscale, vscale, flipped, hflipped, Surface);
+	DrawModelEx(model, frameIndex, duration, tics, nextFrameIndex, frameIndexStep, pos, hscale, vscale, flipped, hflipped, Surface);
 }
 
 // -----------------+

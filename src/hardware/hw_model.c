@@ -145,7 +145,7 @@ tag_t *GetTagByName(model_t *model, char *name, int frame)
 // convert it to the
 // internal format.
 //
-model_t *LoadModel(const char *filename, int ztag)
+model_t *LoadModel(const char *filename, int ztag, size_t spriteModelIndex)
 {
 	model_t *model;
 
@@ -200,7 +200,7 @@ model_t *LoadModel(const char *filename, int ztag)
 	GeneratePolygonNormals(model, ztag);
 	LoadModelSprite2(model);
 	if (!model->spr2frames)
-		LoadModelInterpolationSettings(model);
+		LoadModelSettings(model, spriteModelIndex);
 
 	// Default material properties
 	for (i = 0 ; i < model->numMaterials; i++)
@@ -247,47 +247,70 @@ void HWR_ReloadModels(void)
 	for (i = 0; i < NUMSPRITES; i++)
 	{
 		if (md2_models[i].model)
-			LoadModelInterpolationSettings(md2_models[i].model);
+			LoadModelSettings(md2_models[i].model, i);
 	}
 }
 
-void LoadModelInterpolationSettings(model_t *model)
+void LoadModelSettings(model_t *model, size_t spriteModelIndex)
 {
 	INT32 i;
+	INT32 start = -1;
 	INT32 numframes = model->meshes[0].numFrames;
 	char *framename = model->framenames;
 
 	if (!framename)
 		return;
 
-	#define GET_OFFSET \
-		memcpy(&interpolation_flag, framename + offset, 2); \
-		model->interpolate[i] = (!memcmp(interpolation_flag, MODEL_INTERPOLATION_FLAG, 2));
-
 	for (i = 0; i < numframes; i++)
 	{
-		int offset = (strlen(framename) - 4);
-		char interpolation_flag[3];
-		memset(&interpolation_flag, 0x00, 3);
-
-		// find the +i on the frame name
-		// ANIM+i00
-		// so the offset is (frame name length - 4)
-		GET_OFFSET;
-
-		// maybe the frame had three digits?
-		// ANIM+i000
-		// so the offset is (frame name length - 5)
-		if (!model->interpolate[i])
+		char name[5];
+		memset(&name, 0x00, 5);
+		memcpy(&name, framename, 4);
+		for (size_t j = 0; j < NUMSPRITES; j++)
 		{
-			offset--;
-			GET_OFFSET;
+			if (!memcmp(sprnames[j], name, 5))
+			{
+				if (&md2_models[j] == &md2_models[spriteModelIndex])
+				{
+					start = i;
+					break;
+				}
+			}
 		}
-
+		if (start != -1)
+			break;
 		framename += 16;
 	}
+	start = (start == -1)? 0 : start;
+	model->startFrame = start;
+	framename = model->framenames + 16 * start; 
+	for (i = start; i < numframes; i++)
+	{
+		//int offset = (strlen(framename) - 4);
+		char *modelframeflags = framename + 4;
+		//char name[5];
+		char flags[4];
+		memset(&flags, 0x00, 4);
+		memcpy(&flags, modelframeflags, 3);
+		model->interpolate[i] = false;
+		model->zeroangle[i] = 0;
 
-	#undef GET_OFFSET
+		if (flags[0] == '+')
+		{
+			for (int j = 1; j < 2; j++)
+			{
+				if (flags[j] == MODEL_INTERPOLATION_FLAG)
+					model->interpolate[i] = true;
+				else if (flags[j] == MODEL_0ANGLE_FLAG)
+					model->zeroangle[i] = 1;
+				else if (flags[j] == MODEL_NO_0ANGLE_FLAG)
+					model->zeroangle[i] = -1;
+				else
+					break;	
+			}
+		}
+		framename += 16;
+	}
 }
 
 void LoadModelSprite2(model_t *model)
@@ -304,15 +327,17 @@ void LoadModelSprite2(model_t *model)
 	{
 		char prefix[6];
 		char name[5];
-		char interpolation_flag[3];
+		char flags[5];
 		char framechars[4];
 		UINT8 frame = 0;
 		UINT8 spr2idx;
 		boolean interpolate = false;
+		boolean extend = false; // allow animation to go over default sprite length
+		INT8 zeroangle = 0; // -1 remove all, 0 follow sprites, 1 force all
 
 		memset(&prefix, 0x00, 6);
 		memset(&name, 0x00, 5);
-		memset(&interpolation_flag, 0x00, 3);
+		memset(&flags, 0x00, 5);
 		memset(&framechars, 0x00, 4);
 
 		if (strlen(framename) >= 9)
@@ -324,11 +349,24 @@ void LoadModelSprite2(model_t *model)
 			memcpy(&name, modelframename, 4);
 			modelframename += 4;
 			// Oh look
-			memcpy(&interpolation_flag, modelframename, 2);
-			if (!memcmp(interpolation_flag, MODEL_INTERPOLATION_FLAG, 2))
+			memcpy(&flags, modelframename, 4);
+			if (flags[0] == '+')
 			{
-				interpolate = true;
-				modelframename += 2;
+				modelframename ++;
+				for (int j = 1; j < 4; j++)
+				{
+					if (flags[j] == MODEL_INTERPOLATION_FLAG)
+						interpolate = true;
+					else if (flags[j] == MODEL_EXTEND_FLAG)
+						extend = true;
+					else if (flags[j] == MODEL_0ANGLE_FLAG)
+						zeroangle = 1;
+					else if (flags[j] == MODEL_NO_0ANGLE_FLAG)
+						zeroangle = -1;
+					else
+						break;
+					modelframename++;	
+				}
 			}
 			memcpy(&framechars, modelframename, 3);
 
@@ -356,6 +394,8 @@ void LoadModelSprite2(model_t *model)
 						}
 						spr2frames[spr2idx].frames[frame] = i;
 						spr2frames[spr2idx].interpolate = interpolate;
+						spr2frames[spr2idx].extend = extend;
+						spr2frames[spr2idx].zeroangle = zeroangle;
 						break;
 					}
 					spr2idx++;

@@ -90,14 +90,14 @@ static void md2_freeModel (model_t *model)
 // load model
 //
 // Hurdler: the current path is the Legacy.exe path
-static model_t *md2_readModel(const char *filename)
+static model_t *md2_readModel(const char *filename, size_t spriteModelIndex)
 {
 	//Filename checking fixed ~Monster Iestyn and Golden
 	if (FIL_FileExists(va("%s"PATHSEP"%s", srb2home, filename)))
-		return LoadModel(va("%s"PATHSEP"%s", srb2home, filename), PU_STATIC);
+		return LoadModel(va("%s"PATHSEP"%s", srb2home, filename), PU_STATIC, spriteModelIndex);
 
 	if (FIL_FileExists(va("%s"PATHSEP"%s", srb2path, filename)))
-		return LoadModel(va("%s"PATHSEP"%s", srb2path, filename), PU_STATIC);
+		return LoadModel(va("%s"PATHSEP"%s", srb2path, filename), PU_STATIC, spriteModelIndex);
 
 	return NULL;
 }
@@ -1157,7 +1157,7 @@ static boolean HWR_CanInterpolateModel(mobj_t *mobj, model_t *model)
 {
 	if (cv_glmodelinterpolation.value == 2) // Always interpolate
 		return true;
-	return model->interpolate[(mobj->frame & FF_FRAMEMASK)];
+	return model->interpolate[(mobj->frame & FF_FRAMEMASK) + model->startFrame];
 }
 
 static boolean HWR_CanInterpolateSprite2(modelspr2frames_t *spr2frame)
@@ -1166,6 +1166,17 @@ static boolean HWR_CanInterpolateSprite2(modelspr2frames_t *spr2frame)
 		return true;
 	return spr2frame->interpolate;
 }
+
+static INT8 HWR_CanZeroAngleModel(mobj_t *mobj, model_t *model)
+{
+	return model->zeroangle[(mobj->frame & FF_FRAMEMASK) + model->startFrame];
+}
+
+static INT8 HWR_CanZeroAngleSprite2(modelspr2frames_t *spr2frame)
+{
+	return spr2frame->zeroangle;
+}
+
 
 //
 // HWR_GetModelSprite2 (see P_GetSkinSprite2)
@@ -1275,8 +1286,9 @@ boolean HWR_DrawModel(gl_vissprite_t *spr)
 	md2_t *md2;
 
 	char filename[64];
-	INT32 frame = 0;
-	INT32 nextFrame = -1;
+	float frame = 0.0;
+	float frameStep = 1.0;
+	float nextFrame = -1.0;
 	UINT8 spr2 = 0;
 	FTransform p;
 	FSurfaceInfo Surf;
@@ -1346,6 +1358,7 @@ boolean HWR_DrawModel(gl_vissprite_t *spr)
 		const UINT8 hflip = (UINT8)(!(spr->mobj->mirrored) != !R_ThingHorizontallyFlipped(spr->mobj));
 		spritedef_t *sprdef;
 		spriteframe_t *sprframe;
+		INT8 zeroangle;
 		INT32 mod;
 		interpmobjstate_t interp;
 
@@ -1427,7 +1440,7 @@ boolean HWR_DrawModel(gl_vissprite_t *spr)
 		{
 			//CONS_Debug(DBG_RENDER, "Loading model... (%s)", sprnames[spr->mobj->sprite]);
 			sprintf(filename, "models/%s", md2->filename);
-			md2->model = md2_readModel(filename);
+			md2->model = md2_readModel(filename, spr->mobj->sprite);
 
 			if (md2->model)
 			{
@@ -1512,17 +1525,24 @@ boolean HWR_DrawModel(gl_vissprite_t *spr)
 		{
 			spr2 = HWR_GetModelSprite2(md2, spr->mobj->skin, spr->mobj->sprite2, spr->mobj->player);
 			mod = md2->model->spr2frames[spr2].numframes;
-#ifndef DONTHIDEDIFFANIMLENGTH // by default, different anim length is masked by the mod
-			if (mod > (INT32)((skin_t *)spr->mobj->skin)->sprites[spr2].numframes)
+			frameStep = (mod > (INT32)((skin_t *)spr->mobj->skin)->sprites[spr2].numframes) ? (float)mod/((skin_t *)spr->mobj->skin)->sprites[spr2].numframes : 1.0;
+			
+//#ifndef DONTHIDEDIFFANIMLENGTH // by default, different anim length is masked by the mod
+//extend frames kinda defeats the purpose of this, whatever it was supposed to be
+			if ((mod > (INT32)((skin_t *)spr->mobj->skin)->sprites[spr2].numframes) && !(md2->model->spr2frames[spr2].extend))
+			{
 				mod = ((skin_t *)spr->mobj->skin)->sprites[spr2].numframes;
-#endif
+				frameStep = 1.0;
+			}
+//#endif
 			if (!mod)
 				mod = 1;
-			frame = md2->model->spr2frames[spr2].frames[frame%mod];
+			frame = md2->model->spr2frames[spr2].frames[0] + (fmodf(frame, mod) * frameStep);
 		}
 		else
 		{
-			mod = md2->model->meshes[0].numFrames;
+			frame += md2->model->startFrame;
+			mod = md2->model->meshes[0].numFrames - md2->model->startFrame;
 			if (!mod)
 				mod = 1;
 		}
@@ -1531,7 +1551,7 @@ boolean HWR_DrawModel(gl_vissprite_t *spr)
 		// Interpolate the model interpolation. (lol)
 		tics -= FixedToFloat(rendertimefrac);
 
-#define INTERPOLERATION_LIMIT (TICRATE * 0.25f)
+#define INTERPOLERATION_LIMIT TICRATE
 
 		if (cv_glmodelinterpolation.value && tics <= durs && tics <= INTERPOLERATION_LIMIT)
 		{
@@ -1546,18 +1566,18 @@ boolean HWR_DrawModel(gl_vissprite_t *spr)
 					&& states[spr->mobj->state->nextstate].sprite == SPR_PLAY
 					&& ((P_GetSkinSprite2(spr->mobj->skin, (((spr->mobj->player && spr->mobj->player->powers[pw_super]) ? FF_SPR2SUPER : 0)|states[spr->mobj->state->nextstate].frame) & FF_FRAMEMASK, spr->mobj->player) == spr->mobj->sprite2)))))
 				{
-					nextFrame = (spr->mobj->frame & FF_FRAMEMASK) + 1;
-					if (nextFrame >= mod)
+					nextFrame = (spr->mobj->frame & FF_FRAMEMASK) + 1.0f;
+					if (nextFrame * frameStep >= mod)
 					{
 						if (spr->mobj->state->frame & FF_SPR2ENDSTATE)
 							nextFrame--;
 						else
-							nextFrame = 0;
+							nextFrame = 0.0f;
 					}
-					if (frame || !(spr->mobj->state->frame & FF_SPR2ENDSTATE))
-						nextFrame = md2->model->spr2frames[spr2].frames[nextFrame];
+					if ((INT32)frame || !(spr->mobj->state->frame & FF_SPR2ENDSTATE))
+						nextFrame = md2->model->spr2frames[spr2].frames[0] + (fmodf(nextFrame, mod) * frameStep);
 					else
-						nextFrame = -1;
+						nextFrame = -1.0f;
 				}
 			}
 			else if (HWR_CanInterpolateModel(spr->mobj, md2->model))
@@ -1565,18 +1585,43 @@ boolean HWR_DrawModel(gl_vissprite_t *spr)
 				// frames are handled differently for states with FF_ANIMATE, so get the next frame differently for the interpolation
 				if (spr->mobj->frame & FF_ANIMATE)
 				{
-					nextFrame = (spr->mobj->frame & FF_FRAMEMASK) + 1;
+					nextFrame = (spr->mobj->frame & FF_FRAMEMASK) + md2->model->startFrame + 1;
 					if (nextFrame >= (INT32)(spr->mobj->state->var1 + (spr->mobj->state->frame & FF_FRAMEMASK)))
-						nextFrame = (spr->mobj->state->frame & FF_FRAMEMASK) % mod;
+						nextFrame = (spr->mobj->state->frame & FF_FRAMEMASK) % mod + md2->model->startFrame;
 				}
 				else
 				{
 					if (spr->mobj->state->nextstate != S_NULL && states[spr->mobj->state->nextstate].sprite != SPR_NULL
 					&& !(spr->mobj->player && (spr->mobj->state->nextstate == S_PLAY_WAIT) && spr->mobj->state == &states[S_PLAY_STND]))
-						nextFrame = (states[spr->mobj->state->nextstate].frame & FF_FRAMEMASK) % mod;
+						nextFrame = (states[spr->mobj->state->nextstate].frame & FF_FRAMEMASK) % mod + md2->model->startFrame;
 				}
 			}
 		}
+		if (spr->mobj->skin && spr->mobj->sprite == SPR_PLAY && md2->model->spr2frames)
+		{
+			if ((!HWR_CanInterpolateSprite2(&md2->model->spr2frames[spr2]))
+				&& md2->model->spr2frames[spr2].extend == true
+				&&(spr->mobj->frame & FF_ANIMATE
+				|| (spr->mobj->state->nextstate != S_NULL
+				&& states[spr->mobj->state->nextstate].sprite == SPR_PLAY
+				&& ((P_GetSkinSprite2(spr->mobj->skin, (((spr->mobj->player && spr->mobj->player->powers[pw_super]) ? FF_SPR2SUPER : 0)|states[spr->mobj->state->nextstate].frame) & FF_FRAMEMASK, spr->mobj->player) == spr->mobj->sprite2)))))
+			{	
+				nextFrame = (spr->mobj->frame & FF_FRAMEMASK) + 1.0f;
+					if (nextFrame * frameStep >= mod)
+					{
+						if (spr->mobj->state->frame & FF_SPR2ENDSTATE)
+							nextFrame--;
+						else
+							nextFrame = 0.0f;
+					}
+					if ((INT32)frame || !(spr->mobj->state->frame & FF_SPR2ENDSTATE))
+						nextFrame = md2->model->spr2frames[spr2].frames[0] + (fmodf(nextFrame, mod) * frameStep);
+					else
+						nextFrame = -1.0f;
+				frameStep *= -1; //use negative framestep to indicate extend without interpolation (also keeps value)
+			}
+		}
+
 #undef INTERPOLERATION_LIMIT
 #endif
 
@@ -1596,7 +1641,12 @@ boolean HWR_DrawModel(gl_vissprite_t *spr)
 
 		sprframe = &sprdef->spriteframes[spr->mobj->frame & FF_FRAMEMASK];
 
-		if (sprframe->rotate || papersprite)
+		if (spr->mobj->skin && spr->mobj->sprite == SPR_PLAY && md2->model->spr2frames)
+			zeroangle = HWR_CanZeroAngleSprite2(&md2->model->spr2frames[spr2]);
+		else
+			zeroangle = HWR_CanZeroAngleModel(spr->mobj, md2->model);
+
+		if ((sprframe->rotate || papersprite || zeroangle == -1) && zeroangle != 1)
 		{
 			fixed_t anglef = AngleFixed(interp.angle);
 
@@ -1656,7 +1706,7 @@ boolean HWR_DrawModel(gl_vissprite_t *spr)
 			p.y += ox * gl_viewcos;
 			p.z += oy;
 
-			HWD.pfnDrawModel(md2->model, frame, durs, tics, nextFrame, &p, md2->scale * xs, md2->scale * ys, flip, hflip, &Surf);
+			HWD.pfnDrawModel(md2->model, frame, durs, tics, nextFrame, frameStep, &p, md2->scale * xs, md2->scale * ys, flip, hflip, &Surf);
 		}
 	}
 

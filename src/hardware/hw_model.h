@@ -78,13 +78,18 @@ typedef struct tag_s
 //	matrix_t transform;
 } tag_t;
 
-#define MODEL_INTERPOLATION_FLAG "+i"
+#define MODEL_INTERPOLATION_FLAG 'i'
+#define MODEL_EXTEND_FLAG 'e'
+#define MODEL_0ANGLE_FLAG 'o'
+#define MODEL_NO_0ANGLE_FLAG 'n'
 
 typedef struct
 {
 	INT32 frames[256];
 	UINT8 numframes;
 	boolean interpolate;
+	boolean extend;
+	INT8 zeroangle;
 } modelspr2frames_t;
 
 typedef struct model_s
@@ -101,8 +106,12 @@ typedef struct model_s
 	char *mdlFilename;
 	boolean unloaded;
 
+	UINT32 startFrame; //starting frame for non-spr2 models, can be used in order to allow multiple sprites to be contained in one md3
 	char *framenames;
 	boolean interpolate[256];
+	INT8 zeroangle[256];
+	//no extend for non-spr2 models
+
 	modelspr2frames_t *spr2frames;
 
 	// the max_s and max_t values that the uvs are currently adjusted to
@@ -121,10 +130,10 @@ extern model_t *modelHead;
 void HWR_ReloadModels(void);
 
 tag_t *GetTagByName(model_t *model, char *name, int frame);
-model_t *LoadModel(const char *filename, int ztag);
+model_t *LoadModel(const char *filename, int ztag, size_t spriteModelindex);
 void UnloadModel(model_t *model);
 void Optimize(model_t *model);
-void LoadModelInterpolationSettings(model_t *model);
+void LoadModelSettings(model_t *model, size_t spriteModelindex);
 void LoadModelSprite2(model_t *model);
 void GenerateVertexNormals(model_t *model);
 void GeneratePolygonNormals(model_t *model, int ztag);

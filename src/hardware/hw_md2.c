@@ -1524,15 +1524,17 @@ boolean HWR_DrawModel(gl_vissprite_t *spr)
 		if (spr->mobj->skin && spr->mobj->sprite == SPR_PLAY && md2->model->spr2frames)
 		{
 			spr2 = HWR_GetModelSprite2(md2, spr->mobj->skin, spr->mobj->sprite2, spr->mobj->player);
-			mod = md2->model->spr2frames[spr2].numframes;
+			mod = md2->model->spr2frames[spr2].numframes;//mod = 6
 			frameStep = (mod > (INT32)((skin_t *)spr->mobj->skin)->sprites[spr2].numframes) ? (float)mod/((skin_t *)spr->mobj->skin)->sprites[spr2].numframes : 1.0;
-			
+
 //#ifndef DONTHIDEDIFFANIMLENGTH // by default, different anim length is masked by the mod
 //extend frames kinda defeats the purpose of this, whatever it was supposed to be
-			if ((mod > (INT32)((skin_t *)spr->mobj->skin)->sprites[spr2].numframes) && !(md2->model->spr2frames[spr2].extend))
+			if (mod > (INT32)((skin_t *)spr->mobj->skin)->sprites[spr2].numframes)
 			{
-				mod = ((skin_t *)spr->mobj->skin)->sprites[spr2].numframes;
-				frameStep = 1.0;
+				if (!(md2->model->spr2frames[spr2].extend))
+					mod = ((skin_t *)spr->mobj->skin)->sprites[spr2].numframes;
+				else if (((skin_t *)spr->mobj->skin)->sprites[spr2].numframes < ((skin_t *)spr->mobj->skin)->sprites[spr->mobj->sprite2].numframes)//spr2defaults shenanigans
+					mod = ((skin_t *)spr->mobj->skin)->sprites[spr2].numframes;
 			}
 //#endif
 			if (!mod)
@@ -1551,12 +1553,11 @@ boolean HWR_DrawModel(gl_vissprite_t *spr)
 		// Interpolate the model interpolation. (lol)
 		tics -= FixedToFloat(rendertimefrac);
 
-#define INTERPOLERATION_LIMIT TICRATE
-
-		if (cv_glmodelinterpolation.value && tics <= durs && tics <= INTERPOLERATION_LIMIT)
+#define INTERPOLERATION_LIMIT (TICRATE/4)
+		if (cv_glmodelinterpolation.value && tics <= durs)// && tics <= INTERPOLERATION_LIMIT)
 		{
-			if (durs > INTERPOLERATION_LIMIT)
-				durs = INTERPOLERATION_LIMIT;
+			//if (durs > INTERPOLERATION_LIMIT)
+				//durs = INTERPOLERATION_LIMIT; //removed from spr2 frames since model animation is more flexible
 
 			if (spr->mobj->skin && spr->mobj->sprite == SPR_PLAY && md2->model->spr2frames)
 			{
@@ -1566,7 +1567,7 @@ boolean HWR_DrawModel(gl_vissprite_t *spr)
 					&& states[spr->mobj->state->nextstate].sprite == SPR_PLAY
 					&& ((P_GetSkinSprite2(spr->mobj->skin, (((spr->mobj->player && spr->mobj->player->powers[pw_super]) ? FF_SPR2SUPER : 0)|states[spr->mobj->state->nextstate].frame) & FF_FRAMEMASK, spr->mobj->player) == spr->mobj->sprite2)))))
 				{
-					nextFrame = (spr->mobj->frame & FF_FRAMEMASK) + 1.0f;
+					nextFrame = 1.0f + (spr->mobj->frame & FF_FRAMEMASK);
 					if (nextFrame * frameStep >= mod)
 					{
 						if (spr->mobj->state->frame & FF_SPR2ENDSTATE)
@@ -1580,8 +1581,10 @@ boolean HWR_DrawModel(gl_vissprite_t *spr)
 						nextFrame = -1.0f;
 				}
 			}
-			else if (HWR_CanInterpolateModel(spr->mobj, md2->model))
+			else if (HWR_CanInterpolateModel(spr->mobj, md2->model) && tics <= INTERPOLERATION_LIMIT)
 			{
+				if (durs > INTERPOLERATION_LIMIT)
+					durs = INTERPOLERATION_LIMIT; 
 				// frames are handled differently for states with FF_ANIMATE, so get the next frame differently for the interpolation
 				if (spr->mobj->frame & FF_ANIMATE)
 				{
@@ -1599,14 +1602,15 @@ boolean HWR_DrawModel(gl_vissprite_t *spr)
 		}
 		if (spr->mobj->skin && spr->mobj->sprite == SPR_PLAY && md2->model->spr2frames)
 		{
-			if ((!HWR_CanInterpolateSprite2(&md2->model->spr2frames[spr2]))
+			if ((!HWR_CanInterpolateSprite2(&md2->model->spr2frames[spr2])
+				||!cv_glmodelinterpolation.value)
 				&& md2->model->spr2frames[spr2].extend == true
 				&&(spr->mobj->frame & FF_ANIMATE
 				|| (spr->mobj->state->nextstate != S_NULL
 				&& states[spr->mobj->state->nextstate].sprite == SPR_PLAY
 				&& ((P_GetSkinSprite2(spr->mobj->skin, (((spr->mobj->player && spr->mobj->player->powers[pw_super]) ? FF_SPR2SUPER : 0)|states[spr->mobj->state->nextstate].frame) & FF_FRAMEMASK, spr->mobj->player) == spr->mobj->sprite2)))))
 			{	
-				nextFrame = (spr->mobj->frame & FF_FRAMEMASK) + 1.0f;
+				nextFrame = 1.0f + (spr->mobj->frame & FF_FRAMEMASK);
 					if (nextFrame * frameStep >= mod)
 					{
 						if (spr->mobj->state->frame & FF_SPR2ENDSTATE)
